@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+
+import socket
+import select
+import sys
+from time import sleep
+
+SERVERS = [("192.168.2.42", 6600), ("voellerei",6600), ("localhost", 6600)]
+
+def _tryclose(socket):
+    try:
+        socket.close()
+    except:
+        pass
+
+def _format_addr(addr):
+    return "<{}:{}>".format(addr[0], addr[1])
+
+class Proxy():
+    def __init__(self, port):
+        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.server_socket.bind(("localhost", port))
+        self.server_socket.listen(5)
+        self.mpd_addr = self._search_mpd()
+        self.connection_pairs = []
+        print("Init done", file=sys.stderr)
+
+    def _connect_mpd(self, addr):
+        """ Return a socket connected to the mpd server or None on error """
+        sock = None
+        if addr:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                sock.connect(addr)
+            except:
+                sock = None
+        print("Connected to mpd server at {}".format(_format_addr(sock.getsockname()) if sock else "None"), file=sys.stderr)
+        return sock
+
+    def _try_mpd(self, addr):
+        """ Try if there's a mpd server at the given address """
+        ok = False
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(5)
+        print("Search: trying {}".format(_format_addr(addr)), file=sys.stderr)
+        try:
+            s.connect(addr)
+            msg = str(s.recv(256))
+        except:
+            msg = None
+        if msg and "OK MPD" in msg:
+            print("Search: found mpd on {}".format(_format_addr(addr)), file=sys.stderr)
+            ok = True
+        _tryclose(s)
+        return ok
+
+    def _search_mpd(self):
+        """
+        Search all possible servers for a running mpd instance.
+        Return the _first_ one as (hostname, port) tuple.
+        """
+        for addr in SERVERS:
+            if self._try_mpd(addr):
+                return addr
+        return None
+
+    def _find_mpd(self):
+        mpd = self._search_mpd()
+        while not mpd:
+            print("No mpd server found, retry in 10s", file=sys.stderr)
+            sleep(10)
+            mpd = self._search_mpd()
+        return mpd
+
+    def _accept_client(self, client):
+        """ Create a new mpd connection for a client, add to connection_pairs """
+        mpd_conn = self._connect_mpd(self.mpd_addr)
+        if mpd_conn:
+            self.connection_pairs.append((client, mpd_conn))
+            print("Accepted client {}, new mpd connection to {} (fd {})".format(_format_addr(client.getsockname()), _format_addr(mpd_conn.getsockname()), mpd_conn.fileno()), file=sys.stderr)
+        else:
+            print("mpd connection to {} for client {} failed".format(self.mpd_addr, client.getsockname()), file=sys.stderr)
+            self.mpd_addr = None
+            client.close()
+
+    def _client_for_server(self, server):
+        """ Find the client linked to this mpd connection """
+        #TODO: better data structure for faster search?
+        try:
+            return [c for c,s in self.connection_pairs if s is server][0]
+        except IndexError:
+            return None
+
+    def _server_for_client(self, client):
+        """ Find the mpd connection linked to this client """
+        #TODO: better data structure for faster search?
+        try:
+            return [s for c,s in self.connection_pairs if c is client][0]
+        except IndexError:
+            return None
+
+    def _remove_client(self, client):
+        print("Removing client {}".format(_format_addr(client.getsockname())), file=sys.stderr)
+        self.connection_pairs = list(filter(lambda x: x[0] is not client, self.connection_pairs))
+        server = self._server_for_client(client)
+        _tryclose(server)
+        _tryclose(client)
+
+    def _remove_all_clients(self):
+        print("Removing all clients", file=sys.stderr)
+        for c,s in self.connection_pairs:
+            _tryclose(s)
+            _tryclose(c)
+        self.connection_pairs = []
+
+    def run(self):
+        inputs = [self.server_socket]
+        inputs_mpd = []
+        inputs_clients = []
+        outputs = []
+        while 42:
+            if not self.mpd_addr:
+                self.mpd_addr = self._find_mpd()
+            read, write, error = select.select(inputs, outputs, inputs)
+            for s in read:
+                if s is self.server_socket: # new client
+                    conn, addr = s.accept()
+                    self._accept_client(conn)
+                else: # data from client or mpd
+                    data = s.recv(1024)
+                    if data:
+                        if s in inputs_clients:
+                            self._server_for_client(s).send(data)
+                            #TODO: Queues
+                        elif s in inputs_mpd:
+                            self._client_for_server(s).send(data)
+                        else:
+                            assert False # should never get here
+                    else:
+                        if s in inputs_clients:
+                            self._remove_client(s)
+                        elif s in inputs_mpd:
+                            # mpd connection lost
+                            self._remove_all_clients()
+                            self.mpd_addr = None
+                        else:
+                            assert False # should never get here
+            inputs_mpd = [s for c,s in self.connection_pairs]
+            inputs_clients = [c for c,s in self.connection_pairs]
+            inputs = [self.server_socket] + inputs_mpd + inputs_clients
+            sleep(0.05)
+
+
+if __name__ == "__main__":
+    proxy = Proxy(6601)
+    proxy.run()

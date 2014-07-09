@@ -7,10 +7,9 @@ Takes a list of mpd servers and relays all clients to the first available one of
 Installation & use
 ==================
 
-By now, the servers are hardcoded, you have to change them in the source file.
-
+A configuration file consists of one server per line, ordered by priority and may contain ports (see config example).
 Only needs python 3. Just run it.
 
-	./mpdlocalproxy
+	./mpdlocalproxy [configfile]
 
 Then configure your clients to point to loacalhost port 6601.

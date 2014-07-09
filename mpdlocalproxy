@@ -3,9 +3,10 @@
 import socket
 import select
 import sys
+import re
 from time import sleep
 
-SERVERS = [("192.168.2.42", 6600), ("voellerei",6600), ("localhost", 6600)]
+SERVERS = [("localhost", 6600)]
 
 def _tryclose(socket):
     try:
@@ -16,8 +17,25 @@ def _tryclose(socket):
 def _format_addr(addr):
     return "<{}:{}>".format(addr[0], addr[1])
 
+def _get_addrs_from_config(configfile):
+    addrs = []
+    ip_port = re.compile(r"^(\S*):(\d*)$")
+    ip = re.compile(r"^(\S*)$")
+    for line in open(configfile):
+        line = line.strip()
+        m = re.match(ip_port, line)
+        if m:
+            addrs.append((m.group(1), int(m.group(2))))
+        else:
+            m = re.match(ip, line)
+            if m:
+                addrs.append((m.group(1), 6600))
+    return addrs
+
+
 class Proxy():
-    def __init__(self, port):
+    def __init__(self, port, servers=SERVERS):
+        self.servers = servers
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.server_socket.bind(("localhost", port))
@@ -60,7 +78,7 @@ class Proxy():
         Search all possible servers for a running mpd instance.
         Return the _first_ one as (hostname, port) tuple.
         """
-        for addr in SERVERS:
+        for addr in self.servers:
             if self._try_mpd(addr):
                 return addr
         return None
@@ -153,5 +171,8 @@ class Proxy():
 
 
 if __name__ == "__main__":
-    proxy = Proxy(6601)
+    if len(sys.argv) >= 2:
+        proxy = Proxy(6601, _get_addrs_from_config(sys.argv[1]))
+    else:
+        proxy = Proxy(6601)
     proxy.run()

@@ -86,6 +86,7 @@ class Proxy():
         return None
 
     def _find_mpd(self):
+        """ Search with retries until mpd server found """
         mpd = self._search_mpd()
         while not mpd:
             print("No mpd server found, retry in 10s", file=sys.stderr)
@@ -98,7 +99,7 @@ class Proxy():
         mpd_conn = self._connect_mpd(self.mpd_addr)
         if mpd_conn:
             self.connection_pairs.append((client, mpd_conn))
-            print("Accepted client {}, new mpd connection to {} (fd {})".format(_format_addr(client.getsockname()), _format_addr(mpd_conn.getsockname()), mpd_conn.fileno()), file=sys.stderr)
+            print("Accepted client {}, new mpd connection to {} (fd {})".format(_format_addr(client.getpeername()), _format_addr(mpd_conn.getpeername()), mpd_conn.fileno()), file=sys.stderr)
         else:
             print("mpd connection to {} for client {} failed".format(self.mpd_addr, client.getsockname()), file=sys.stderr)
             self.mpd_addr = None
@@ -121,6 +122,7 @@ class Proxy():
             return None
 
     def _remove_client(self, client):
+        """ Remove a client and it's mpd connection """
         print("Removing client {}".format(_format_addr(client.getsockname())), file=sys.stderr)
         self.connection_pairs = list(filter(lambda x: x[0] is not client, self.connection_pairs))
         server = self._server_for_client(client)
@@ -128,6 +130,7 @@ class Proxy():
         _tryclose(client)
 
     def _remove_all_clients(self):
+        """ Remove all clients and mpd connections """
         print("Removing all clients", file=sys.stderr)
         for c,s in self.connection_pairs:
             _tryclose(s)

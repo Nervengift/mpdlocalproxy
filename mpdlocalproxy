@@ -5,6 +5,7 @@ import select
 import sys
 import re
 from time import sleep
+from datetime import datetime
 
 SERVERS = [("localhost", 6600)]
 
@@ -60,7 +61,7 @@ class Proxy():
         """ Try if there's a mpd server at the given address """
         ok = False
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(5)
+        s.settimeout(3)
         print("Search: trying {}".format(_format_addr(addr)), file=sys.stderr)
         try:
             s.connect(addr)
@@ -137,8 +138,14 @@ class Proxy():
         inputs_mpd = []
         inputs_clients = []
         outputs = []
+        lastcheck = datetime.now()
         while 42:
+            if (datetime.now() - lastcheck).seconds > 120:
+                # periodically check for new mpd server (of probably higher priority)
+                self.mpd_addr = self._search_mpd()
+                lastcheck = datetime.now()
             if not self.mpd_addr:
+                # connection to mpd lost or simply none found by now
                 self.mpd_addr = self._find_mpd()
             read, write, error = select.select(inputs, outputs, inputs)
             for s in read:

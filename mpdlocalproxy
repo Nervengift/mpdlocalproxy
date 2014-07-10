@@ -44,6 +44,7 @@ class Proxy():
         self.server_socket.listen(5)
         self.mpd_addr = self._search_mpd()
         self.connection_pairs = []
+        self.reconnect_needed = False
         print("Init done", file=sys.stderr)
 
     def _connect_mpd(self, addr):
@@ -138,7 +139,10 @@ class Proxy():
         self.connection_pairs = []
 
     def _recheck(self):
-        self.mpd_addr = self._search_mpd()
+        last_mpd = self.mpd_addr
+        self.mpd_addr = self._find_mpd()
+        if self.mpd_addr is not last_mpd:
+            self.reconnect_needed = True
 
     def run(self):
         inputs = [self.server_socket]
@@ -147,18 +151,24 @@ class Proxy():
         outputs = []
         lastcheck = datetime.now()
         while 42:
-            if (datetime.now() - lastcheck).seconds > 120:
-                # periodically check for new mpd server (of probably higher priority)
+            if self.reconnect_needed:
+                print("foo")
+                self._remove_all_clients()
+                self.reconnect_needed = False
+            if not self.mpd_addr or (datetime.now() - lastcheck).seconds > 120:
                 thread.start_new_thread(self._recheck, ())
                 lastcheck = datetime.now()
-            if not self.mpd_addr:
-                # connection to mpd lost or simply none found by now
-                self.mpd_addr = self._find_mpd()
+
+            inputs_mpd = [s for c,s in self.connection_pairs]
+            inputs_clients = [c for c,s in self.connection_pairs]
+            inputs = [self.server_socket] + inputs_mpd + inputs_clients
+
             read, write, error = select.select(inputs, outputs, inputs)
             for s in read:
                 if s is self.server_socket: # new client
                     conn, addr = s.accept()
-                    self._accept_client(conn)
+                    if self.mpd_addr:
+                        self._accept_client(conn)
                 else: # data from client or mpd
                     data = s.recv(1024)
                     if data:
@@ -178,9 +188,6 @@ class Proxy():
                             self.mpd_addr = None
                         else:
                             assert False # should never get here
-            inputs_mpd = [s for c,s in self.connection_pairs]
-            inputs_clients = [c for c,s in self.connection_pairs]
-            inputs = [self.server_socket] + inputs_mpd + inputs_clients
             sleep(0.05)
 
 
